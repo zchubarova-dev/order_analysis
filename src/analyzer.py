@@ -29,16 +29,66 @@ class OrderAnalyzer:
 
     def read_file(self, file_path):
         file_path = Path(file_path)
-        return pd.read_csv(file_path)
+
+        return pd.read_csv(
+            file_path,
+            sep=None,
+            engine="python",
+        )
 
     def validate_columns(self, data):
-        missing_columns = self.required_columns - set(data.columns)
+        missing_columns = (
+            self.required_columns
+            - set(data.columns)
+        )
 
         if missing_columns:
-            missing = ", ".join(sorted(missing_columns))
-            raise ValueError(
-                f"отсутствуют обязательные колонки: {missing}"
+            missing = ", ".join(
+                sorted(missing_columns)
             )
+
+            raise ValueError(
+                f"отсутствуют обязательные колонки: "
+                f"{missing}"
+            )
+
+    def validate_total_amount(self, data):
+        raw_amounts = (
+            data["total_amount"]
+            .astype(str)
+            .str.strip()
+        )
+
+        converted_amounts = pd.to_numeric(
+            raw_amounts,
+            errors="coerce",
+        )
+
+        invalid_values = (
+            converted_amounts.isna()
+            | raw_amounts.eq("")
+        )
+
+        if invalid_values.any():
+            values = (
+                data.loc[
+                    invalid_values,
+                    "total_amount",
+                ]
+                .drop_duplicates()
+                .tolist()
+            )
+
+            raise ValueError(
+                "столбец total_amount содержит "
+                "нечисловые или пустые значения: "
+                f"{values}"
+            )
+
+        data = data.copy()
+        data["total_amount"] = converted_amounts
+
+        return data
 
     def filter_delivered(self, data):
         return data[
@@ -48,10 +98,7 @@ class OrderAnalyzer:
     def calculate_metrics(self, data):
         delivered_data = self.filter_delivered(data)
 
-        amounts = pd.to_numeric(
-            delivered_data["total_amount"],
-            errors="coerce",
-        ).dropna()
+        amounts = delivered_data["total_amount"]
 
         return {
             "total_sum": amounts.sum(),
@@ -64,7 +111,10 @@ class OrderAnalyzer:
 
         try:
             data = self.read_file(file_path)
+
             self.validate_columns(data)
+
+            data = self.validate_total_amount(data)
 
             metrics = self.calculate_metrics(data)
 
@@ -77,10 +127,12 @@ class OrderAnalyzer:
 
         except Exception as error:
             message = (
-                f"Ошибка обработки файла "
+                f"Файл пропущен "
                 f"{file_path.name}: {error}"
             )
+
             self._log_error(message)
+
             raise
 
     def analyze_all_files(self):
@@ -107,6 +159,7 @@ class OrderAnalyzer:
         ):
             try:
                 result = self.analyze_file(file_path)
+
                 results.append(result)
 
             except Exception as error:
@@ -116,5 +169,7 @@ class OrderAnalyzer:
                         "error": str(error),
                     }
                 )
+
+                continue
 
         return results, errors
